@@ -1,0 +1,475 @@
+//Written by Soumitra Bhide 
+//Charles Robin's Lab, Building 184, University of Melbourne, Australia
+
+
+
+initialize() {
+	initializeSLiMModelType("nonWF"); //NonWF model to simulate operlapping generations
+	initializeSLiMOptions(dimensionality="xy"); //Initialises a 2D space with x ∈ [0,1] & y ∈ [0,1]
+	
+	
+	
+	if (exists("slimgui")) {
+		
+		defineConstant("ISF",10);	// Generations between the insecticide spray
+		
+		defineConstant("RFP",1.0); //Formation of drive resistant allele if Cas9 manages to make the cut (Champer 2019)
+	
+	
+	
+	}
+	
+	// population parameters
+	defineConstant("K", 10000); // Carrying capacity of the population
+	
+	defineConstant("Movement",0.15);				// Movement of inds that dictates matechoice and movement
+	
+	defineConstant("DensityDist",0.01);			//Distance for spatial competition
+	
+	
+	
+	//Each generation lasts 10 days IRL
+	
+	
+	initializeInteractionType(1, "xy", reciprocal=T, maxDistance=Movement); // Mate choice function
+	
+	initializeInteractionType(2, "xy", reciprocal=T, maxDistance=DensityDist*3); //Spatial competition function
+	i1.setInteractionFunction("n", 1.0, DensityDist);
+	
+	
+	//Drive and resistance parameters
+	
+	defineConstant("Rippase",F); //T if Rippase is part of construct, else F
+	
+	defineConstant("drive_pos", 0); //Defines locus of drive and associated alleles including wildtype and resistant
+	
+	defineConstant("Release", 100); 	// Defines highest possible single release number of Drive individuals
+	
+	defineConstant("cas9_eff", 0.95); // Efficiency of Cas9 to make the cut
+	
+	defineConstant("Rippase_slope", 1.0); // Defines slope for rippase effciency based on the chemical dosage
+	
+	defineConstant("Rippase_base", 0.0); // Defines base efficiency of rippase i.e. at lowest dosage
+	
+	defineConstant("GDR_fitness", 0.0); //Fitness of resistant inds under normal environmental conditions
+	
+	
+	
+	
+	
+	
+	
+	
+	//Insecticide spray parameters
+	
+	defineConstant("IR",T); //T if chemical (insecticide) susceptibility is part of the construct, else F
+	
+	defineConstant("dose",0.2); // Dose of the chemical sprayed , 0.0 ~ lowest dose while 1.0 ~ highest dose
+	
+	defineConstant("IEP", 1.0); //Probability of an individual getting exposed to insecticide			
+	
+	defineConstant("W",1.0); 	//Width of space sprayed with insecticide
+	
+	
+	
+	
+	
+	//Mortality parameters
+	
+	defineConstant("Drive_larval_slope",0.64143); // slope of mortality-dosage regression line for drive inds (larvae)
+	
+	defineConstant("Drive_larval_base_mort",0.36095); //baseline mortality i.e. at lowest dose for drive inds (larvae)
+	
+	defineConstant("Drive_adult_slope",0.64143); // slope of mortality-dosage regression line for drive inds(adult)
+	
+	defineConstant("Drive_adult_base_mort",0.36095); //baseline mortality i.e. at lowest dose for drive inds (adult)
+	
+	defineConstant("Wildtype_larval_slope",0.14); // slope of mortality-dosage regression line for wt inds (larvae)
+	
+	defineConstant("Wildtype_larval_base_mort",0.48238);	//baseline mortality i.e. at lowest dose for wt inds (larvae)
+	
+	defineConstant("Wildtype_adult_slope",0.14); //slope of mortality-dosage regression line for wt individuals
+	
+	defineConstant("Wildtype_adult_base_mort",0.48238); //baseline mortality i.e. at lowest dose for wt inds (adult)
+	
+	
+	
+	
+	
+	
+	//Mutation and chromosome parameters
+	
+	wt=initializeMutationType("m1",0.5,"f",0.0); //Wildtype allele
+	m1.convertToSubstitution= F;
+	m1.color = "white";
+	
+	drive=initializeMutationType("m2",0.5, "f", 0.0); // Drive allele (Susucptible to insecticide)
+	m2.color = "red";
+	m2.convertToSubstitution = F;
+	
+	res = initializeMutationType("m3",0.5,"f",0.0); // Resistant allele (Resistant to CRISPR-cas9)
+	m3.color="yellow";
+	m3.convertToSubstitution= F;
+	
+	
+	variations=c(wt,drive,res);
+	
+	initializeGenomicElementType("g1", variations, c(1,1,1));	//Genomic element with ability to store 3 allles
+	initializeGenomicElement(g1, 0, 0); //Genomic elemet with only one locus
+	
+	initializeMutationRate(0); //Mutation rate set to 0 to avoid random mutations
+	initializeRecombinationRate(0);// Recombination rate set to zero
+	initializeSex("A"); //Drive is present on an autosome
+	
+	variations.mutationStackPolicy = "l"; //All 3 muatation occupy same locus and final mutation is kept in the memory
+	variations.mutationStackGroup = 1;
+
+
+
+
+}
+// Function for age based mortality. Logistic regression fitted with data from  Lin et al 2014
+
+function (float) Agesurvival (o<Subpopulation>$ subpop) {
+	
+	survival= 0.8076/(1+exp(2.4324*(subpop.individuals.age -3.0958))); //Age based survival 
+	
+	return survival;
+
+}
+
+
+
+
+
+
+reproduction(NULL, "F") {
+	
+	//Selects a female in the population
+	
+	mate = i1.nearestNeighbors(individual, 1); //Finds mate within perticular distance dictated by MateChoice
+	
+	drive=sim.mutationsOfType(m2);
+	
+
+	
+	if (size(mate) > 0){
+		
+		competition=i2.totalOfNeighborStrengths(individual);
+		competition = (competition + 1)/(2*PI*DensityDist^2); //Calculates competition faced by the female
+		
+		
+		fec = K/(30*competition); //Calculates fecundity factor
+		
+		
+		
+		littersize= rpois(1,50*fec); //Yields an integer for fecundity from poisson dist. with mean of calculated fecudity
+		if ( individual.age > 1 & mate.age > 1 & mate.sex =="M") // Checks that a mate and female are of reproductive age
+			for(j in seqLen(littersize))
+			{
+				offspring= p1.addCrossed(individual,mate); //Produces one offspring from mating 
+				pos = individual.spatialPosition;
+				offspring.setSpatialPosition(p1.pointStopped(pos));}//Offspring is placed where female is present
+	}
+
+}
+
+1 early() {
+	
+	sim.addSubpop("p1", K); // P1 population with K carrying capcity
+	p1.setSpatialBounds(c(0.0,0.0,3.0,1.0)); // Spatial X bounds changed to x ∈ [0,3] to simulate rectangular space
+	
+	
+	p1.individuals.age = rdunif(K , min=0, max=6); // Age of each ind is selected from cont uniform dis
+	p1.individuals.x = runif(p1.individualCount,0.0,3.0);
+	p1.individuals.y = runif(p1.individualCount,0.0,1.0);//Each ind is placed in 2D space  from cont uniform dist
+	
+	p1.individuals.genomes.addNewDrawnMutation(m1,drive_pos); //Wildtype allele is present in all inds of the population
+
+
+}
+
+early(){
+	
+	i2.evaluate();
+	inds=p1.individuals;
+	
+	inds.fitnessScaling = (Agesurvival(p1));//Changes fitness of each ind depending on competition and its age
+	
+	competition = i2.totalOfNeighborStrengths(inds);
+	competition = (competition + 1) / (2*PI * DensityDist^2); //Checks competition felt by every ind in its space
+	inds.fitnessScaling=K/(competition); // scales up the fitness in accordance to the competition
+	
+	
+	inds[inds.age>=6].fitnessScaling=0.00; //Anyone over age of 6 immediately dies
+
+
+
+}
+
+
+
+20 early() {
+	
+	// Creates a target group of ind with x less than 0.1	
+	
+	inds= p1.individuals;
+	target=inds[inds.x < 0.1];
+	
+	
+	converted= sample(target,(Release>size(target))? size(target) else Release);
+	converted.genomes.addNewMutation(m2, 0.0, drive_pos); 	//Introduces drive in the the target based on "Release" parameter
+
+
+
+}
+
+20:1000 early(){
+	
+	wt=sim.mutationsOfType(m1);
+	drive=sim.mutationsOfType(m2);
+	resis=sim.mutationsOfType(m3);
+	
+	
+	
+	inds=p1.individuals;
+	sprayinds= inds[inds.x > (1.5-W/2) & inds.x < (1.5+W/2) & inds.containsMutations(drive)]; //Groups together the drive inds in the spray window
+	
+	
+	if(sim.generation % ISF ==0 & size(sprayinds)>0 ) //Checks if the chemical is sprayed and if there's is drive present in the window
+	{
+		for (FocalIndividual in sprayinds) //Picks one ind from the sprayinds group and performs following actions
+		{
+			if (runif(1)<= IEP)// Checks if the ind is exposed or not using IEP
+			{
+				Rippase_eff= Rippase_slope*dose+Rippase_base;
+				if(runif(1)<= Rippase_eff & Rippase) // If exposed, checks if rippase is active based on Rippase_eff
+				{
+					if(FocalIndividual.genome1.containsMutations(drive) & !FocalIndividual.genome2.containsMutations(drive))
+					{
+						FocalIndividual.genome1.addMutations(resis); //*
+					}
+					if(!FocalIndividual.genome1.containsMutations(drive) & FocalIndividual.genome2.containsMutations(drive))
+					{
+						FocalIndividual.genome2.addMutations(resis); //* 	Adds drive resistance due to action of rippase
+					}
+					if(FocalIndividual.genome1.containsMutations(drive) & FocalIndividual.genome2.containsMutations(drive))
+					{
+						FocalIndividual.genomes.addMutations(resis); //*
+					}
+				}
+				
+				if (IR)
+				{
+					//# Calculates mortality for each genotype based on the dosage
+					drive_larvae_mortality=Drive_larval_slope*dose+Drive_larval_base_mort; //#
+					wild_larvae_mortality=Wildtype_larval_slope*dose+Wildtype_larval_base_mort; //#
+					drive_adult_mortality=Drive_adult_slope*dose+Drive_adult_base_mort;//#
+					wild_adult_mortality=Wildtype_adult_slope*dose+Wildtype_adult_base_mort;//#
+					
+					
+					//For larvae
+					if(FocalIndividual.age < 1)
+					{
+						//Checks genotype and calculates probability of its death
+						if(FocalIndividual.containsMutations(wt))
+						{
+							if(runif(1)<=wild_larvae_mortality & dose >=0.5)
+							{
+								FocalIndividual.fitnessScaling=0.0;
+							}
+						}
+						
+						else
+							if (FocalIndividual.containsMutations(drive)){
+								if(runif(1)<=drive_larvae_mortality)
+								{
+									FocalIndividual.fitnessScaling=0.0;
+								}
+							}
+					}
+					
+					//For adult
+					if(FocalIndividual.age >=1)
+					{
+						//Checks genotype and calculates probability of its death
+						if(FocalIndividual.containsMutations(wt))
+						{
+							if(runif(1)<=wild_larvae_mortality & dose >=0.5)
+							{
+								FocalIndividual.fitnessScaling=0.0;
+							}
+						}
+						
+						else
+							if (FocalIndividual.containsMutations(drive))
+						{
+							if(runif(1)<=drive_larvae_mortality)
+							{
+								FocalIndividual.fitnessScaling=0.0;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+20:1000 fitness(m3,p1){
+	
+	if (homozygous)
+		return GDR_fitness; //Changes fitness of homozygous resistant inds
+	else
+		return 1.0;
+}
+
+
+
+
+
+20:1000 modifyChild() {
+	
+	
+	
+	//CRISPR-Cas9 activity in the produced offsprings
+	
+	drive = sim.mutationsOfType(m2);
+	resis=sim.mutationsOfType(m3);
+	
+	hasDriveOnChromosome1 = childGenome1.containsMutations(drive); //Checks if the offspring has drive on chromosome 1
+	hasDriveOnChromosome2 = childGenome2.containsMutations(drive);//Checks if the offspring has drive on chromosome 2
+	hasResOnChromosome1 = childGenome1.containsMutations(resis); //Checks if the offspring has resistant allele on chromosome 1
+	hasResOnChromosome2 = childGenome2.containsMutations(resis); //Checks if the offspring has resistant allele on chromosome 2
+	
+	if (size(drive)==1 & size(resis)==1) { //Checks if drive is present in population and if resistance has arisen 
+		
+		if(hasDriveOnChromosome1 | hasDriveOnChromosome2) //Checks that the given offspring has drive
+		{
+			if(hasDriveOnChromosome1 ){	// Checks if the offspring has drive on chromosome 1		
+				
+				if(!hasResOnChromosome2 & !hasDriveOnChromosome2){//Ensures that res allele is not present on Chromosome 2
+					
+					if (runif(1) <= cas9_eff){ //Checks whether the cas9 makes the cut
+						
+						if(runif(1) <= RFP){ //if it does, probability of resistant allele formation
+							childGenome2.addMutations(resis);//Adds Res allele
+						}
+						else{
+							
+							childGenome2.addMutations(drive);//Adds drive allele to Chromosome 2
+						}
+					}
+				}
+			}
+			else // This implies drive is on Chromosome 2
+			{
+				if(!hasResOnChromosome1 & !hasDriveOnChromosome1){ //Ensures that res allele is not present on Chromosome 1
+					
+					if (runif(1) <= cas9_eff){ //Checks whether the cas9 makes the cut
+						
+						if(runif(1) <= RFP){ //if it does, probability of resistant allele formation
+							childGenome1.addMutations(resis); //Adds Res allele
+						}
+						else{
+							childGenome1.addMutations(drive); //Adds drive allele to Chromosome 1
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	else if (size(resis)==0 & size(drive)==1){ //Reistance is not present in the population
+		
+		if(hasDriveOnChromosome1 | hasDriveOnChromosome2) //Checks that the given offspring has drive
+		{
+			if(hasDriveOnChromosome1){	// Checks if the offspring has drive on chromosome 1	
+				
+				if (runif(1) <= cas9_eff){ //Checks whether the cas9 makes the cut
+					
+					if(runif(1) <= RFP){ //if it does, probability of resistant allele formation
+						childGenome2.addNewDrawnMutation(m3,drive_pos); //Introduces new mutation aka Res allele
+					}
+					else{
+						childGenome2.addMutations(drive);//Adds drive alles
+					}
+				}
+			
+			}
+			else // This implies drive is on Chromosome 2
+			{
+				
+				if (runif(1) <= cas9_eff){ //Checks whether the cas9 makes the cut
+					
+					if(runif(1) <= RFP){ //if it does, probability of resistant allele formation
+						childGenome2.addNewDrawnMutation(m3,drive_pos); //Introduces new mutation aka Res allele
+					}
+					else{
+						childGenome1.addMutations(drive); //Adds drive alles
+					}
+				}
+			}
+		}
+	
+	
+	}
+	return T; //Ensures that offspring is added to population
+}
+
+late() {
+	
+	i1.evaluate();
+	i2.evaluate(); //Evaluates both MateChoice and Spatial competition functions
+	
+	inds = p1.individuals;
+	
+	
+	
+	for (ind in p1.individuals)
+	{
+		newPos = ind.spatialPosition + rnorm(2, 0.0, Movement/4);
+		ind.setSpatialPosition(p1.pointStopped(newPos)); //Moves each ind defined by normal dist with mean of 0 and SD of movement speed
+	}
+	
+	
+	//Colours the inds according to their genotype, ignored under command line
+	inds[inds.countOfMutationsOfType(m1) ==2].color="white";
+	inds[inds.countOfMutationsOfType(m2)== 2].color="darkred";
+	inds[inds.countOfMutationsOfType(m3) ==2].color="yellow";
+	inds[inds.countOfMutationsOfType(m1) ==1 & inds.countOfMutationsOfType(m2)==1].color="red";
+	inds[inds.countOfMutationsOfType(m2) ==1 & inds.countOfMutationsOfType(m3)==1].color="orange";
+	inds[inds.countOfMutationsOfType(m1) ==1 & inds.countOfMutationsOfType(m3)==1].color="blue";
+}
+
+
+
+
+
+20:1000 late() {	//Output functions	
+	
+	inds=p1.individuals;
+	drive = sim.mutationsOfType(m2);
+	
+	
+	
+	
+	
+	check=inds[inds.x > 2.0]; //Creates a group of inds with x greater that 2.0 
+	
+	
+	
+	if (any(check.containsMutations(drive))){ //Checks whether drive has reached that landmark in this generation
+		
+		cat("0"); //Outputs "0" as a sign of unsuccessful control
+		
+		sim.simulationFinished(); //Stops the simulation
+	}
+	
+	if(sim.generation==1000 | size(drive)==0){ //Checks if the simulation has reached 1000 generations (~27.4 years) or drive has died out
+		
+		cat("1"); //Outputs "1" as a sign of successful control
+		
+		sim.simulationFinished(); //Stops the simulation
+	}
+}
